@@ -20,6 +20,7 @@ from model import SEDD
 from model.ema import ExponentialMovingAverage
 from transformers import GPT2TokenizerFast, GPT2LMHeadModel
 
+import wandb
 
 torch.backends.cudnn.benchmark = True
 # torch.autograd.set_detect_anomaly(True)
@@ -37,6 +38,49 @@ def setup(rank, world_size, port):
 
 def cleanup():
     dist.destroy_process_group()
+
+
+def wandb_setup(cfg):
+    wandb_dir = os.path.abspath(cfg.work_dir)
+    os.environ["WANDB_DIR"] = wandb_dir 
+    os.makedirs(wandb_dir, exist_ok=True)
+
+    wandb.login(host="https://fairwandb.org")
+
+    fname = f"{cfg.work_dir}/wandb_id"
+    resume = os.path.exists(fname)
+    kwargs = {}
+    if resume:
+        with open(fname, "r") as f:
+            wandb_id = f.read()
+        kwargs["id"] = wandb_id
+        kwargs["resume"] = "must"
+
+        print(f"Resuming wandb from {wandb_id}")
+
+
+    run = wandb.init(
+        project=cfg.wandb_proj,
+        entity=cfg.wandb_entity,
+        config=dict(cfg),
+        save_code=True,
+        name=cfg.experiment,
+        # sync_tensorboard=True,
+        **kwargs,
+    )
+
+    if not resume:
+        with open(fname, "w") as f:
+            f.write(run.id)
+    
+    return run
+
+def wandb_customize_step():
+    wandb.define_metric("train/step")
+    wandb.define_metric("train/*", step_metric="train/step")
+
+    wandb.define_metric("eval/step")
+    wandb.define_metric("eval/*", step_metric="eval/step")
 
 
 def run_multiprocess(rank, world_size, cfg, port):
@@ -63,9 +107,16 @@ def _run(rank, world_size, cfg):
     # logging
     if rank == 0:
         logger = utils.get_logger(os.path.join(work_dir, "logs"))
+        run = wandb_setup(cfg)
+        wandb_customize_step()
+
     def mprint(msg):
         if rank == 0:
             logger.info(msg)
+
+    def wandb_log(logging_dict):
+        if rank == 0:
+            wandb.log(logging_dict)
 
     mprint(work_dir)
     mprint(cfg)
@@ -120,10 +171,9 @@ def _run(rank, world_size, cfg):
     # load in tokenizer
     tokenizer = GPT2TokenizerFast.from_pretrained('gpt2')
 
-    mprint(f"Starting loading data.")
+    mprint(f"$$$ Starting loading data.")
     # Build data iterators
     train_ds, eval_ds = data.get_dataloaders(cfg)
-    mprint(f"$$$$$$$$$$$$$$$$$$$$$$$$$$$$.")
 
     # mprint(f"Length of datasets: {len(train_ds)}, {len(eval_ds)}")
 
@@ -152,7 +202,7 @@ def _run(rank, world_size, cfg):
             batch = next(train_iter)['input_ids'].to(device)
         else:
             batch = next(train_iter).to(device)
-        loss = train_step_fn(state, batch)
+        loss, grad_norm_l2_agg, grad_norm_avg = train_step_fn(state, batch)
 
         # flag to see if there was movement ie a full batch got computed
         if step != state['step']:
@@ -161,6 +211,11 @@ def _run(rank, world_size, cfg):
                 loss /= world_size
 
                 mprint("step: %d, training_loss: %.5e" % (step, loss.item()))
+                wandb_log({
+                    "train/step": step, "train/loss": loss.item(),
+                    "train/grad_norm_l2_aggregation": grad_norm_l2_agg,
+                    "train/grad_norm_avg": grad_norm_avg
+                })
             
             if step % cfg.training.snapshot_freq_for_preemption == 0 and rank == 0:
                 utils.save_checkpoint(checkpoint_meta_dir, state)
@@ -176,6 +231,7 @@ def _run(rank, world_size, cfg):
                 eval_loss /= world_size
 
                 mprint("step: %d, evaluation_loss: %.5e" % (step, eval_loss.item()))
+                wandb_log({"eval/step": step, "eval/loss": eval_loss.item()})
 
             if step > 0 and step % cfg.training.snapshot_freq == 0 or step == num_train_steps:
                 # Save the checkpoint.
@@ -219,6 +275,7 @@ def _run(rank, world_size, cfg):
                             dist.all_reduce(total_perplexity)
                             total_perplexity /= world_size
                             mprint(f"Generative Perplexity at step: {step}. Perplexity: {total_perplexity:.3f}.")
+                            wandb_log({"eval/step": step, "eval/perplexity": total_perplexity})
 
                             del eval_model, logits, loss
 

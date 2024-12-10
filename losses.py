@@ -90,9 +90,30 @@ def get_step_fn(noise, graph, train, optimize_fn, accum):
             optimizer = state['optimizer']
             scaler = state['scaler']
             loss = loss_fn(model, batch, cond=cond).mean() / accum
-            
+
             scaler.scale(loss).backward()
 
+            grad_norm_l2_agg = (
+                sum(
+                    p.grad.data.norm(2).item() ** 2
+                    for p in model.parameters()
+                    if p.grad is not None
+                )
+                ** 0.5
+            )
+
+            grad_norm_avg = (
+                sum(
+                    p.grad.data.norm(2).item()
+                    for p in model.parameters()
+                    if p.grad is not None
+                )
+                / sum( 1 
+                    for p in model.parameters()
+                    if p.grad is not None
+                )
+            )
+            
             accum_iter += 1
             total_loss += loss.detach()
             if accum_iter == accum:
@@ -105,6 +126,8 @@ def get_step_fn(noise, graph, train, optimize_fn, accum):
                 
                 loss = total_loss
                 total_loss = 0
+
+            return loss, grad_norm_l2_agg, grad_norm_avg
         else:
             with torch.no_grad():
                 ema = state['ema']
@@ -113,6 +136,6 @@ def get_step_fn(noise, graph, train, optimize_fn, accum):
                 loss = loss_fn(model, batch, cond=cond).mean()
                 ema.restore(model.parameters())
 
-        return loss
+            return loss
 
     return step_fn

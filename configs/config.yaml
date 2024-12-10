@@ -4,6 +4,8 @@ defaults:
   - override hydra/launcher: submitit_slurm
 
 experiment: default
+wandb_entity: rainydaysleep
+wandb_proj: sedd-uniform
 
 ngpus: 8
 tokens: 50257
@@ -14,7 +16,7 @@ training:
   n_iters: 1300001
   snapshot_freq: 50000
   log_freq: 50
-  eval_freq: 100
+  eval_freq: 2000
   snapshot_freq_for_preemption: 10000
   weight: standard
   snapshot_sampling: True
