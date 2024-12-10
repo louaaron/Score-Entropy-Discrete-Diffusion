@@ -120,8 +120,10 @@ def _run(rank, world_size, cfg):
     # load in tokenizer
     tokenizer = GPT2TokenizerFast.from_pretrained('gpt2')
 
+    mprint(f"Starting loading data.")
     # Build data iterators
     train_ds, eval_ds = data.get_dataloaders(cfg)
+    mprint(f"$$$$$$$$$$$$$$$$$$$$$$$$$$$$.")
 
     # mprint(f"Length of datasets: {len(train_ds)}, {len(eval_ds)}")
 

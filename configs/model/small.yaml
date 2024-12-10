@@ -5,5 +5,5 @@ cond_dim: 128
 length: 1024
 n_blocks: 12
 n_heads: 12
-scale_by_sigma: True
+scale_by_sigma: False
 dropout: 0.1

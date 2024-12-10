@@ -3,6 +3,8 @@ defaults:
   - model: small
   - override hydra/launcher: submitit_slurm
 
+experiment: default
+
 ngpus: 8
 tokens: 50257
 
@@ -21,15 +23,15 @@ training:
 data:
   train: openwebtext
   valid: wikitext103
-  cache_dir: data
+  cache_dir: /checkpoint/storygen/zqq/data/openwebtext
 
 graph:
-  type: absorb
+  type: uniform
   file: data
   report_all: False
 
 noise:
-  type: loglinear
+  type: geometric
   sigma_min: 1e-4
   sigma_max: 20
 
@@ -56,16 +58,19 @@ optim:
 
 hydra:
   run:
-    dir: exp_local/${data.train}/${now:%Y.%m.%d}/${now:%H%M%S}
+    dir: /checkpoint/storygen/zqq/sedd/exp_local/${now:%Y.%m.%d}/${now:%H%M%S}_${experiment}
   sweep:
-    dir: exp/${data.train}/${now:%Y.%m.%d}/${now:%H%M%S}
+    dir: /checkpoint/storygen/zqq/sedd/exp/${now:%Y.%m.%d}/${now:%H%M%S}_${experiment}
     subdir: ${hydra.job.num}
   launcher:
     max_num_timeout: 100000
-    # timeout_min: 10079
-    partition: g40x
-    account: stanford
-    mem_gb: 96
-    cpus_per_task: 40
-    gpus_per_node: ${ngpus}
+    timeout_min: 10079
+    account: storygen
+    qos: storygen_high
+    cpus_per_task: 50
+    gpus_per_node: 8
+    nodes: 1
     constraint: null
+    submitit_folder: /checkpoint/storygen/zqq/sedd/exp/${data.train}/${now:%Y.%m.%d}/${now:%H%M%S}_${experiment}/slurm
+  job:
+    name: ${experiment}
