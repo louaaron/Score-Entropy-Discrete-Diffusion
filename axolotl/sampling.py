@@ -71,7 +71,9 @@ def write_samples(output: str,
                   name: str = "sample",
                   use_wandb: bool = False,
                   current_table: Optional[Table] = None,
-                  mode: str = 'a'
+                  mode: str = 'a',
+                  header: bool = True,
+                  boltz_header: bool = False,
 ):
     """Write samples to a file."""
     
@@ -93,7 +95,10 @@ def write_samples(output: str,
                 raise ValueError(f"Invalid label: {sampling_label[i]}")
             w = sampling_cfg_w[i].item()
             
-            file.write(f">{name}_{i} label:{sequence_label} cfg_w:{w} steps:{steps}\n")
+            if boltz_header:
+                file.write(f">{i}|protein|empty\n")
+            if header:
+                file.write(f">{name}_{i} label:{sequence_label} cfg_w:{w} steps:{steps}\n")
             file.write(seq + "\n")
 
             if use_wandb:
@@ -141,7 +146,7 @@ class EulerPredictor(Predictor):
         dsigma = dsigma.unsqueeze(-1) # TODO: make it so this is not necessary
         rev_rate = step_size * dsigma[..., None] * self.graph.reverse_rate(x, score)
         x = self.graph.sample_rate(x, rev_rate)
-        return x
+        return x, None
 
 
 @register_predictor(name="analytic_score")
@@ -159,7 +164,7 @@ class AnalyticPredictor(Predictor):
         dsigma = dsigma.unsqueeze(-1) # TODO: make it so this is not necessary
         stag_score = self.graph.staggered_score(score, dsigma)
         probs = stag_score * self.graph.transp_transition(x, dsigma)
-        return sample_categorical(probs)
+        return sample_categorical(probs), None
 
 
 @register_predictor(name="ancestral_x0")
@@ -190,7 +195,7 @@ class AncestralPredictor(Predictor):
         elif not self.graph.absorb:
             probs = unmask_prob * x0_prediction + (1 - unmask_prob) * F.one_hot(x, num_classes=self.graph.dim)
 
-        return sample_categorical(probs)
+        return sample_categorical(probs), x0_prediction
 
 
 class Denoiser:
@@ -279,7 +284,8 @@ def get_pc_sampler(graph,
                    num_labels: int=2,
                    use_tqdm: bool=False,
                    prediction_type: str=None,
-                   print_intermediates: bool=False,
+                   return_intermediates: bool=False,
+                   return_x0: bool=False
 ):
     if prediction_type in ['x0', 'x0_flow']:
         assert predictor == 'ancestral_x0', "Prediction type x0 requires the predictor to be ancestral_x0"
@@ -348,20 +354,23 @@ def get_pc_sampler(graph,
                 x = graph.sample_x1(x)
                 x1 = x
 
-        if print_intermediates:
-            print(x[0])
         timesteps = torch.linspace(1, eps, steps + 1, device=device)
         dt = (1 - eps) / steps
+
+        if return_intermediates:
+            intermediates = []
+        if return_x0:
+            x0_predictions = []
+        
 
         for i in tqdm(range(steps), desc='Sampling', disable=not use_tqdm):
             t = timesteps[i] * torch.ones(x.shape[0], device=device)
             x = projector(x)
-            x = predictor.update_fn(sampling_output_fn, x, t, dt, input_label, cfg_w, use_cfg, x1=x1)
-            if print_intermediates:
-                print(x[0])
-            
-            # if i > 5: # testing
-            #     raise ValueError("Too many steps")
+            x, x0_pred = predictor.update_fn(sampling_output_fn, x, t, dt, input_label, cfg_w, use_cfg, x1=x1)
+            if return_x0:
+                x0_predictions.append(x0_pred)
+            if return_intermediates:
+                intermediates.append(x)
 
 
         if denoise:
@@ -369,10 +378,12 @@ def get_pc_sampler(graph,
             x = projector(x)
             t = timesteps[-1] * torch.ones(x.shape[0], device=device)
             x = denoiser.update_fn(sampling_output_fn, x, t, input_label, cfg_w, use_cfg, x1=x1)
-            if print_intermediates:
-                print(x[0])
+            if return_x0:
+                x0_predictions.append(F.one_hot(x, num_classes=graph.dim).float())
+            if return_intermediates:
+                intermediates.append(x)
             
-        return x, input_label, cfg_w
+        return x, input_label, cfg_w, x0_predictions if return_x0 else None, intermediates if return_intermediates else None
     
     return pc_sampler
 

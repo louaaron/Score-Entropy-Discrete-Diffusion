@@ -322,14 +322,13 @@ class DiscreteDiT(nn.Module, PyTorchModelHubMixin):
         elif self.prediction_type in ['x0', 'x0_flow']:
             # Make the last dim -inf for the absorb token
             if self.absorb:
-                # ## Old implementation
-                # indices_mask = F.one_hot(indices, num_classes=self.dim).to(torch.bool)
-                # x = torch.where(indices_mask, -torch.inf, x)
-                # ##
 
                 masking_state = torch.ones_like(indices) * (self.dim - 1)
-                indices_mask = F.one_hot(masking_state, num_classes=self.dim).to(torch.bool)
-                x = torch.where(indices_mask, -torch.inf, x)
+                mask = F.one_hot(masking_state, num_classes=self.dim).to(torch.bool)
+                indices_mask = F.one_hot(indices, num_classes=self.dim).to(torch.bool)
+                x = torch.where(indices_mask, 10000, x)
+                x = torch.where(mask, -torch.inf, x)
+
                 
             elif not self.absorb:
                 pass
